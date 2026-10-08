@@ -1,0 +1,65 @@
+# RuneScape: Dragonwilds dedicated server — official image, run as a Portainer stack on a Linux desktop.
+# Image docs: https://github.com/runescape/rsdw-dedicated   Game docs: https://dragonwilds.runescape.wiki/w/Dedicated_Servers
+# All values marked ${...} come from the Portainer stack's "Environment variables" (never commit secrets).
+services:
+  server:
+    image: ghcr.io/runescape/rsdw-dedicated:2.0.1  # ghcr tags have no "v" (git tag v2.0.1)
+    container_name: dragonwilds
+    restart: unless-stopped
+    ports:
+      # Game port and beacon port. Beacon is always game port + 1111. Host and container ports must match.
+      - "7777:7777/udp"
+      - "8888:8888/udp"
+    environment:
+      # Mandatory: your in-game Player ID (bottom of the Settings menu). The server refuses to start without it.
+      RSDW_OWNER_ID: ${RSDW_OWNER_ID:?set RSDW_OWNER_ID in the stack environment}
+      # "Created by" name shown in the browser.
+      RSDW_SERVER_NAME: ${RSDW_SERVER_NAME:-Dragonwilds}
+      # The world/save name players search for under Worlds > Public. Case-sensitive, keep it short, no spaces.
+      RSDW_WORLD_NAME: ${RSDW_WORLD_NAME:?set RSDW_WORLD_NAME in the stack environment}
+      # Join password. Must be DEFINED; an empty value means an open world (the image default "random" changes every start).
+      RSDW_PASSWORD: ${RSDW_PASSWORD?define RSDW_PASSWORD (empty = open world)}
+      # Password for the in-game Server Management screen.
+      RSDW_ADMIN_PASSWORD: ${RSDW_ADMIN_PASSWORD:?set RSDW_ADMIN_PASSWORD in the stack environment}
+      # Comma-separated Player IDs that get admin rights without the password.
+      RSDW_ADMINS: ${RSDW_ADMINS:-}
+      RSDW_PORT: "7777"
+      RSDW_BEACON_PORT: "8888"
+      # Stop when Steam publishes a new build; restart policy brings it back on the new build (clients must match).
+      RSDW_AUTO_STOP_ON_UPDATE: "true"
+      # Extra launch args for RSDragonwildsServer.sh, if ever needed.
+      RSDW_ADDITIONAL_ARGS: ${RSDW_ADDITIONAL_ARGS:-}
+      # 2 = server logs on (0 off, 1 SteamCMD, 3 both).
+      DEBUG: "2"
+      # Set to "1" once to re-validate files after a bad update.
+      STEAMAPPVALIDATE: ${STEAMAPPVALIDATE:-0}
+    volumes:
+      # Server files, config and saves. Saves: RSDragonwilds/Saved/Savegames inside this directory.
+      - /home/pedro/dragonwilds:/home/steam/rsdw-dedicated
+    # 2 GB + 1 GB per player (6 max) = 8 GB; the limit is a guard, not a target.
+    mem_limit: 12g
+    # Give the server time to save on stop/update.
+    stop_grace_period: 90s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  # Save backups every 30 minutes, 14 days kept, as plain tarballs next to the data directory.
+  backup:
+    image: alpine:3.20
+    container_name: dragonwilds-backup
+    restart: unless-stopped
+    user: "1000:1000"
+    volumes:
+      - /home/pedro/dragonwilds:/data:ro
+      - /home/pedro/dragonwilds-backups:/backups
+    command: >
+      sh -c 'while true; do
+        if [ -d /data/RSDragonwilds/Saved/Savegames ]; then
+          tar czf "/backups/saves-$(date +%F-%H%M).tgz" -C /data/RSDragonwilds/Saved Savegames && echo "backup $(date +%F-%H%M) ok";
+          find /backups -name "saves-*.tgz" -mtime +14 -delete;
+        fi;
+        sleep 1800;
+      done'
