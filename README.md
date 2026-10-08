@@ -31,6 +31,12 @@ In the game: Worlds → **Public** → search the exact `RSDW_WORLD_NAME` (case-
 `RSDW_PASSWORD`. Console players must enable online play and crossplay. On the LAN you can also
 direct-connect to `HOST_LAN_IP:7777`.
 
+Invite code: the server logs one on every start (it changes on each restart). In Portainer open the
+container logs and search for `JoinCode`, or on the host:
+```
+docker logs dragonwilds 2>&1 | grep -o 'JoinCode.*value\[[^]]*\]' | tail -1
+```
+
 ## Worlds
 - Fresh: the server creates a Standard world named `RSDW_WORLD_NAME` on first start.
 - Custom settings or migrating a co-op world: create/load the world in the game client (wait ~2 min
