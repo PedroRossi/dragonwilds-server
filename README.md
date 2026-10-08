@@ -53,7 +53,10 @@ and keeps 14 days. Restore = stop the stack, extract into `<data dir>/RSDragonwi
 ## Config reference
 The only server-side settings (`RSDragonwilds/Saved/Config/LinuxServer/DedicatedServer.ini`, generated from the
 env vars on every start — do not hand-edit): `OwnerId`, `ServerName`, `DefaultWorldName`, `WorldPassword`,
-`AdminPassword`, `AdministratorList`. Gameplay settings (difficulty, PvP, etc.) live in the world save.
+`AdminPassword`, `AdministratorList`. The game rewrites this file while running (adds `ServerGuid`, drops
+`AdminPassword`): that is normal, the password stays active and is rendered again on the next start.
+The join code in the logs and the server GUID change on every start. Gameplay settings (difficulty, PvP, etc.)
+live in the world save.
 Roles: owner (the Owner ID) can ban/unban; admins (password or list) can ban online players; players need the
 world name + password.
 
