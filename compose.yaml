@@ -34,7 +34,7 @@ services:
       # Set to "1" once to re-validate files after a bad update.
       STEAMAPPVALIDATE: ${STEAMAPPVALIDATE:-0}
     volumes:
-      # Server files, config and saves. Saves: RSDragonwilds/Saved/Savegames inside this directory.
+      # Server files, config and saves. Saves: RSDragonwilds/Saved/SaveGames (capital G on Linux) inside this directory.
       - /home/pedro/dragonwilds:/home/steam/rsdw-dedicated
     # 2 GB + 1 GB per player (6 max) = 8 GB; the limit is a guard, not a target.
     mem_limit: 12g
@@ -57,8 +57,8 @@ services:
       - /home/pedro/dragonwilds-backups:/backups
     command: >
       sh -c 'while true; do
-        if [ -d /data/RSDragonwilds/Saved/Savegames ]; then
-          tar czf "/backups/saves-$(date +%F-%H%M).tgz" -C /data/RSDragonwilds/Saved Savegames && echo "backup $(date +%F-%H%M) ok";
+        if [ -d /data/RSDragonwilds/Saved/SaveGames ]; then
+          tar czf "/backups/saves-$(date +%F-%H%M).tgz" -C /data/RSDragonwilds/Saved SaveGames && echo "backup $(date +%F-%H%M) ok";
           find /backups -name "saves-*.tgz" -mtime +14 -delete;
         fi;
         sleep 1800;

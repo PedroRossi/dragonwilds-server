@@ -36,7 +36,7 @@ direct-connect to `HOST_LAN_IP:7777`.
 - Custom settings or migrating a co-op world: create/load the world in the game client (wait ~2 min
   after entering so it generates), quit, then with the stack **stopped** copy the `.sav` from
   `%LOCALAPPDATA%\RSDragonwilds\Saved\SaveGames` (Windows) into
-  `<data dir>/RSDragonwilds/Saved/Savegames/` **without renaming it**, empty that folder of
+  `<data dir>/RSDragonwilds/Saved/SaveGames/` (capital G on Linux) **without renaming it**, empty that folder of
   other saves first, set `RSDW_WORLD_NAME` to the file name without `.sav`, start the stack.
 - The server always loads the newest `.sav` in that folder.
 
@@ -47,7 +47,7 @@ brings it back and the entrypoint updates via SteamCMD on start (about two minut
 Bumps of the image tag (`2.0.1`; ghcr tags carry no "v") are done here in git, then **Pull and redeploy** in Portainer.
 
 ## Backups
-The `backup` sidecar tars `RSDragonwilds/Saved/Savegames` every 30 minutes into the backups directory
+The `backup` sidecar tars `RSDragonwilds/Saved/SaveGames` every 30 minutes into the backups directory
 and keeps 14 days. Restore = stop the stack, extract into `<data dir>/RSDragonwilds/Saved/`, start.
 
 ## Config reference
