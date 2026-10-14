@@ -17,6 +17,25 @@ Crossplay, up to **6 players** (the official cap). No secrets live in this repo:
 Host prerequisites: idle suspend disabled; the data directories in `compose.yaml` exist and are owned by
 uid 1000 (the image runs as that user). Keep the machine powered on while people play.
 
+## Operations CLI (`dw`)
+Runs from this repo on any machine that can SSH to the host, and drives Docker there:
+```
+uv sync              # once; or `uv tool install --editable .` to get `dw` on your PATH
+uv run dw key        # current invite code (`dw key | pbcopy` copies it)
+uv run dw backup     # verified backup on the host, plus a copy in ~/dragonwilds-backups
+uv run dw status     # state, installed vs latest Steam build, world, players online, last autosave
+uv run dw update     # after a game patch: restart onto the new build, only if there is one
+uv run dw restart    # same, without the build check
+```
+`restart` and `update` back up first. If anyone is online they ask before kicking them and wait for the next
+autosave. Then they stop the game process cleanly (a plain `docker stop` kills it outright because the image's
+launcher doesn't pass SIGTERM on), start the container (SteamCMD updates on start), check that the same
+world (by GUID) came back and print the new invite code.
+
+Login uses your SSH keys (`ssh-copy-id pedro@192.168.1.5` once), or `DW_SSH_PASSWORD` in the environment
+(needs `sshpass`). Defaults match this deployment; override them with `DW_HOST` (`local` when running on
+the host itself), `DW_CONTAINER`, `DW_DATA_DIR`, `DW_BACKUP_DIR` and `DW_LOCAL_BACKUP_DIR` (see `dw --help`).
+
 ## Router (MikroTik, RouterOS v6)
 Give the host a static DHCP lease, then forward both UDP ports to it (replace `HOST_LAN_IP`):
 ```
@@ -31,10 +50,11 @@ In the game: Worlds → **Public** → search the exact `RSDW_WORLD_NAME` (case-
 `RSDW_PASSWORD`. Console players must enable online play and crossplay. On the LAN you can also
 direct-connect to `HOST_LAN_IP:7777`.
 
-Invite code: the server logs one on every start (it changes on each restart). In Portainer open the
-container logs and search for `JoinCode`, or on the host:
+Invite code: the server logs one on every start (it changes on each restart). `dw key` prints it; without
+the CLI, search the container logs for `JoinCode` in Portainer, or on the host (`-a` because the log
+contains binary bytes):
 ```
-docker logs dragonwilds 2>&1 | grep -o 'JoinCode.*value\[[^]]*\]' | tail -1
+docker logs dragonwilds 2>&1 | grep -a -o 'JoinCode.*value\[[^]]*\]' | tail -1
 ```
 
 ## Worlds
@@ -47,14 +67,18 @@ docker logs dragonwilds 2>&1 | grep -o 'JoinCode.*value\[[^]]*\]' | tail -1
 - The server always loads the newest `.sav` in that folder.
 
 ## Updates
-Clients and server must run the same build or the server disappears from the browser. The container
-checks Steam every 30 min and, with `RSDW_AUTO_STOP_ON_UPDATE=true`, stops itself; `restart: unless-stopped`
-brings it back and the entrypoint updates via SteamCMD on start (about two minutes of downtime).
+Clients and server must run the same build or the server disappears from the browser. The entrypoint
+updates the game via SteamCMD on every container start, but nothing triggers that start when a patch ships.
+`RSDW_AUTO_STOP_ON_UPDATE` relies on Valve's UpToDateCheck API, which answers "Couldn't get app info" for
+this app (4019830), so the check never fires and logs nothing. After a game patch, run `dw update`
+(about three minutes of downtime).
 Bumps of the image tag (`2.0.1`; ghcr tags carry no "v") are done here in git, then **Pull and redeploy** in Portainer.
 
 ## Backups
 The `backup` sidecar tars `RSDragonwilds/Saved/SaveGames` every 30 minutes into the backups directory
 and keeps 14 days. Restore = stop the stack, extract into `<data dir>/RSDragonwilds/Saved/`, start.
+`dw backup` (and every `dw restart`/`dw update`) also writes `manual-*.tgz` archives of the whole `Saved/`
+folder (logs excluded). The sidecar never prunes these; extract them into `<data dir>/RSDragonwilds/`.
 
 ## Config reference
 The only server-side settings (`RSDragonwilds/Saved/Config/LinuxServer/DedicatedServer.ini`, generated from the
