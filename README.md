@@ -82,11 +82,14 @@ folder (logs excluded). The sidecar never prunes these; extract them into `<data
 
 ## Crashes (watchdog)
 When the game process dies, its container stays up and the image only notices after up to 30 minutes. Build
-25811348 segfaults in `UPlayerCombatModeComponent::HandlePlayerEngagedActors` when a crossbow bolt hits; it's a
-game bug. The `watchdog` sidecar checks every 20 s. Once the game has been gone for two checks, it snapshots
-`SaveGames` into the backups directory and restarts the container, so the server is back about a minute later.
-Play since the last autosave (every 5 minutes) is lost. The snapshots are named `saves-<time>-crash.tgz` and
-are pruned with the others after 14 days.
+25811348 (1.0.1) segfaults in `UPlayerCombatModeComponent::HandlePlayerEngagedActors` when a player's oak
+shortbow shot lands, possibly through its new Rapid Fire special. Enemy arrows are harmless. It's a game bug, and
+other servers report it too.
+
+The `watchdog` sidecar checks every 20 s. Once the game has been gone for two checks, it snapshots `SaveGames`
+into the backups directory and restarts the container, so the server is back about a minute later. Play since
+the last autosave (every 5 minutes) is lost. The snapshots are named `saves-<time>-crash.tgz` and are pruned with
+the others after 14 days.
 
 It only acts after seeing the game run in the container's current start, so never during SteamCMD downloads
 and never on a stopped stack. It backs off after 3 restarts in an hour, and it needs the Docker socket. Its
