@@ -63,3 +63,48 @@ services:
         fi;
         sleep 1800;
       done'
+
+  # Restarts the server when the game process dies but its container stays up (a crash): the image's
+  # entrypoint only notices after its 30-minute Steam update sleep. Acts only once it has seen the game
+  # running in the container's current start, never on a stopped container; snapshots the saves first
+  # and stands back after 3 restarts in an hour (crash loop). Shell "$" is written "$$" for compose.
+  watchdog:
+    image: docker:29.8.1-cli
+    container_name: dragonwilds-watchdog
+    restart: unless-stopped
+    init: true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /home/pedro/dragonwilds:/data:ro
+      - /home/pedro/dragonwilds-backups:/backups
+    environment:
+      WATCH_CONTAINER: dragonwilds
+      WATCH_INTERVAL: "20"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        c=$$WATCH_CONTAINER seen= misses=0 restarts=
+        echo "watching $$c every $${WATCH_INTERVAL}s"
+        while sleep "$$WATCH_INTERVAL"; do
+          run=$$(docker inspect -f '{{.State.Running}} {{.State.StartedAt}}' "$$c" 2>/dev/null)
+          case $$run in true\ *) ;; *) seen= misses=0; continue ;; esac
+          if docker top "$$c" 2>/dev/null | grep -q RSDragonwildsServer-Linux-Shipping; then
+            seen=$$run misses=0
+            continue
+          fi
+          [ "$$seen" = "$$run" ] || continue  # not launched yet in this start (SteamCMD)
+          misses=$$((misses + 1))
+          [ "$$misses" -ge 2 ] || continue
+          seen= misses=0 now=$$(date +%s)
+          restarts=$$(for t in $$restarts; do [ $$((now - t)) -lt 3600 ] && echo "$$t"; done)
+          set -- $$restarts
+          if [ $$# -ge 3 ]; then
+            echo "$$(date '+%F %T') game down again, 3 restarts this hour: leaving it to the entrypoint"
+            continue
+          fi
+          echo "$$(date '+%F %T') game process gone, restarting $$c"
+          docker logs --tail 300 "$$c" 2>&1 | grep -E '^(Unhandled Exception|0x)' | head -n 2 | cut -c 1-200
+          snapshot="/backups/saves-$$(date +%F-%H%M)-crash.tgz"
+          tar czf "$$snapshot" -C /data/RSDragonwilds/Saved SaveGames && chown 1000:1000 "$$snapshot"
+          docker restart -t 30 "$$c" >/dev/null && restarts="$$restarts $$now"
+        done

@@ -21,8 +21,9 @@ PUBLIC_BUILD_URL = f"https://api.steamcmd.net/v1/info/{STEAM_APP_ID}"
 # reach docker up to ~90 s late: anything timing-sensitive (autosaves) watches files instead.
 LOG_PATTERN = (
     "JoinCode|WorldSaveGuid|Loading configured world|Login request|Join succeeded"
-    "|UChannel::CleanUp|Requested pausing"
+    "|UChannel::CleanUp|Requested pausing|Launching RSDragonwildsServer"
 )
+GAME_PROCESS = "RSDragonwildsServer-Linux-Shipping"
 STARTUP_PATTERN = (
     "Installed Steam build ID|Error! App|Retrying SteamCMD|Launching RSDragonwildsServer"
     "|Loading configured world|WorldSaveGuid|JoinCode"
@@ -30,15 +31,21 @@ STARTUP_PATTERN = (
 
 # The scripts below run under sh on the host and take their inputs as $1, $2, ...
 
-# $1 container, $2 grep pattern, $3 app manifest, $4 SaveGames dir. Prints "@state <status>
-# <started at>", "@build <manifest buildid line>", "@saved <epoch of the newest .sav>", then
-# the matching log lines of the current (or last) run.
+# $1 container, $2 grep pattern, $3 app manifest, $4 SaveGames dir, $5 game process name,
+# $6 and $7 sidecar containers. Prints "@state <status> <started at>", "@game up|down",
+# "@build <manifest buildid line>", "@saved <epoch of the newest .sav>", "@sidecars
+# <name>=<status>...", then the matching log lines of the current (or last) run.
 CURRENT_RUN = r"""
 state=$(docker inspect -f '{{.State.Status}} {{.State.StartedAt}}' "$1") || exit 1
 echo "@state $state"
+game=down
+if [ "${state%% *}" = running ] && docker top "$1" 2>/dev/null | grep -q "$5"; then game=up; fi
+echo "@game $game"
 echo "@build $(grep -m 1 '"buildid"' "$3" 2>/dev/null)"
 newest=$(ls -t "$4"/*.sav 2>/dev/null | head -n 1)
 echo "@saved ${newest:+$(date -r "$newest" +%s)}"
+sidecars=$(docker inspect -f '{{.Name}}={{.State.Status}}' "$6" "$7" 2>/dev/null | tr -d /)
+echo "@sidecars" $sidecars
 docker logs --since "${state#* }" "$1" 2>&1 | grep -a -E "$2" | sed -E 's/[?]p=[^?]*//'
 """
 
@@ -81,12 +88,11 @@ for sav in "$saved"/SaveGames/*.sav; do
 done
 """
 
-# $1 container, $2 seconds to wait. `docker stop` alone kills the game outright: the image's
-# bash launcher doesn't pass SIGTERM on. Signalling the game process itself lets the engine
-# shut down cleanly (no torn save, and the session leaves the server browser right away).
+# $1 container, $2 seconds to wait, $3 game process name. `docker stop` alone kills the game
+# outright: the image's bash launcher doesn't pass SIGTERM on. Signalling the game process itself
+# lets the engine shut down cleanly (no torn save, and the session leaves the browser at once).
 STOP = r"""
-pid=$(docker exec "$1" ps -eo pid=,args= \
-  | awk '/RSDragonwildsServer-Linux-Shipping/ {print $1; exit}')
+pid=$(docker exec "$1" ps -eo pid=,args= | awk -v game="$3" '$0 ~ game {print $1; exit}')
 if [ -z "$pid" ]; then
   echo "game=not running"
 else
@@ -242,15 +248,27 @@ class Settings:
 class Snapshot:
     """The container's state and what its current run has logged so far."""
 
-    status: str
+    status: str  # the container's, from docker
     started_at: str
+    game_running: bool  # the game process itself; it can die while its container stays up
     installed_build: str | None
     last_save: datetime | None
+    sidecars: dict[str, str]  # container name -> docker status, for those that exist
     lines: tuple[str, ...]
 
     @property
-    def running(self) -> bool:
+    def container_running(self) -> bool:
         return self.status == "running"
+
+    @property
+    def condition(self) -> str:
+        if not self.container_running:
+            return self.status
+        if self.game_running:
+            return "running"
+        if any("Launching RSDragonwildsServer" in line for line in self.lines):
+            return "CRASHED: the game process is gone but its container is still up"
+        return "starting (SteamCMD)"
 
     @property
     def invite_code(self) -> str | None:
@@ -266,7 +284,7 @@ class Snapshot:
 
     @property
     def players(self) -> list[str]:
-        return parsing.online_players(self.lines) if self.running else []
+        return parsing.online_players(self.lines) if self.game_running else []
 
 
 @dataclass(frozen=True)
@@ -286,14 +304,25 @@ class Server:
         self.host = Host(settings.host, settings.ssh_password)
         self._manifest = f"{settings.data_dir}/steamapps/appmanifest_{STEAM_APP_ID}.acf"
         self._saved = f"{settings.data_dir}/RSDragonwilds/Saved"
+        # Named by compose.yaml after the server container.
+        self.sidecar_names = (f"{settings.container}-backup", f"{settings.container}-watchdog")
 
     def snapshot(self, pattern: str = LOG_PATTERN) -> Snapshot:
-        args = (self.settings.container, pattern, self._manifest, f"{self._saved}/SaveGames")
-        state, build, saved, *lines = self.host.text(CURRENT_RUN, *args).splitlines()
+        saves = f"{self._saved}/SaveGames"
+        args = (self.settings.container, pattern, self._manifest, saves, GAME_PROCESS)
+        out = self.host.text(CURRENT_RUN, *args, *self.sidecar_names)
+        state, game, build, saved, sidecars, *lines = out.splitlines()
         status, _, started_at = state.removeprefix("@state ").partition(" ")
         epoch = saved.removeprefix("@saved").strip()
-        last_save = datetime.fromtimestamp(int(epoch), UTC) if epoch else None
-        return Snapshot(status, started_at, parsing.acf_build_id(build), last_save, tuple(lines))
+        return Snapshot(
+            status=status,
+            started_at=started_at,
+            game_running=game == "@game up",
+            installed_build=parsing.acf_build_id(build),
+            last_save=datetime.fromtimestamp(int(epoch), UTC) if epoch else None,
+            sidecars=dict(item.split("=", 1) for item in sidecars.split()[1:]),
+            lines=tuple(lines),
+        )
 
     def backup(self, label: str = "") -> Backup:
         args = (self._saved, self.settings.backup_dir, self._manifest, label)
@@ -323,7 +352,8 @@ class Server:
 
     def stop(self, timeout: int = 120) -> str:
         """Stop the game cleanly, then the container; says how the game process ended."""
-        out = self.host.text(STOP, self.settings.container, str(timeout), timeout=timeout + 90)
+        args = (self.settings.container, str(timeout), GAME_PROCESS)
+        out = self.host.text(STOP, *args, timeout=timeout + 90)
         outcomes = [line for line in out.splitlines() if line.startswith("game=")]
         return outcomes[0].removeprefix("game=") if outcomes else "in an unknown state"
 

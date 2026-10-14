@@ -31,14 +31,37 @@ def test_key_refuses_a_stale_code_from_a_stopped_server(docker: Path):
     assert dw(docker, "key").exit_code == 1
 
 
+def test_key_refuses_a_stale_code_from_a_crashed_game(docker: Path):
+    (docker / "game-exited").touch()
+    (docker / "log").write_text(RUN_LOG)
+    result = dw(docker, "key")
+    assert result.exit_code == 1
+    assert "AAAA-1111" not in result.output
+
+
 def test_status(docker: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(cli, "public_build", lambda: "25811348")
     (docker / "log").write_text(RUN_LOG)
     result = dw(docker, "status")
     assert result.exit_code == 0
+    assert "running (started" in result.stdout
     assert "25811348 (latest)" in result.stdout
     assert "MyWorld (GUID ABCD)" in result.stdout
     assert "AAAA-1111" in result.stdout
+    assert "dragonwilds-backup running, dragonwilds-watchdog missing" in result.stdout
+
+
+def test_status_reports_a_crash(docker: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(cli, "public_build", lambda: "25811348")
+    (docker / "game-exited").touch()
+    (docker / "log").write_text(
+        RUN_LOG + "Launching RSDragonwildsServer.sh\nJoin succeeded: Alice\n"
+    )
+    result = dw(docker, "status")
+    assert result.exit_code == 0
+    assert "CRASHED" in result.stdout
+    assert "Players online  nobody" in result.stdout
+    assert "AAAA-1111" not in result.stdout
 
 
 def test_update_does_nothing_when_already_on_the_latest_build(

@@ -23,7 +23,7 @@ Runs from this repo on any machine that can SSH to the host, and drives Docker t
 uv sync              # once; or `uv tool install --editable .` to get `dw` on your PATH
 uv run dw key        # current invite code (`dw key | pbcopy` copies it)
 uv run dw backup     # verified backup on the host, plus a copy in ~/dragonwilds-backups
-uv run dw status     # state, installed vs latest Steam build, world, players online, last autosave
+uv run dw status     # health (incl. a crashed game), Steam build, world, players, autosave, sidecars
 uv run dw update     # after a game patch: restart onto the new build, only if there is one
 uv run dw restart    # same, without the build check
 ```
@@ -79,6 +79,18 @@ The `backup` sidecar tars `RSDragonwilds/Saved/SaveGames` every 30 minutes into 
 and keeps 14 days. Restore = stop the stack, extract into `<data dir>/RSDragonwilds/Saved/`, start.
 `dw backup` (and every `dw restart`/`dw update`) also writes `manual-*.tgz` archives of the whole `Saved/`
 folder (logs excluded). The sidecar never prunes these; extract them into `<data dir>/RSDragonwilds/`.
+
+## Crashes (watchdog)
+When the game process dies, its container stays up and the image only notices after up to 30 minutes. Build
+25811348 segfaults in `UPlayerCombatModeComponent::HandlePlayerEngagedActors` when a crossbow bolt hits; it's a
+game bug. The `watchdog` sidecar checks every 20 s. Once the game has been gone for two checks, it snapshots
+`SaveGames` into the backups directory and restarts the container, so the server is back about a minute later.
+Play since the last autosave (every 5 minutes) is lost. The snapshots are named `saves-<time>-crash.tgz` and
+are pruned with the others after 14 days.
+
+It only acts after seeing the game run in the container's current start, so never during SteamCMD downloads
+and never on a stopped stack. It backs off after 3 restarts in an hour, and it needs the Docker socket. Its
+log, `docker logs dragonwilds-watchdog`, records each restart with the crash's first stack frame.
 
 ## Config reference
 The only server-side settings (`RSDragonwilds/Saved/Config/LinuxServer/DedicatedServer.ini`, generated from the

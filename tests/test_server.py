@@ -43,16 +43,36 @@ def test_snapshot_reads_the_current_run_without_the_join_password(docker: Path, 
         "unrelated noise\n"
     )
     snap = Server(settings).snapshot()
-    assert (snap.status, snap.installed_build, snap.invite_code) == (
+    assert (snap.condition, snap.installed_build, snap.invite_code) == (
         "running",
         "25811348",
         "AAAA-1111",
     )
+    assert snap.sidecars == {"dragonwilds-backup": "running"}
     assert snap.started_at == "2026-10-14T19:49:44.866612718Z"
     assert snap.last_save == datetime(2026, 10, 14, 20, 13, 23, tzinfo=UTC)
     assert snap.players == ["Alice"]
     assert len(snap.lines) == 3
     assert not any("c2VjcmV0" in line for line in snap.lines)
+
+
+def test_snapshot_spots_a_game_that_crashed_inside_a_running_container(
+    docker: Path, settings: Settings
+):
+    (docker / "game-exited").touch()
+    (docker / "log").write_text(
+        "Launching RSDragonwildsServer.sh\nLogNet: Join succeeded: Alice\n"
+        "RSDragonwildsServer.sh: line 5:   125 Segmentation fault\n"
+    )
+    snap = Server(settings).snapshot()
+    assert snap.container_running and not snap.game_running
+    assert snap.condition.startswith("CRASHED")
+    assert snap.players == []
+
+
+def test_snapshot_tells_a_starting_server_from_a_crashed_one(docker: Path, settings: Settings):
+    (docker / "game-exited").touch()
+    assert Server(settings).snapshot().condition == "starting (SteamCMD)"
 
 
 def test_wait_for_autosave_watches_the_save_file(docker: Path, settings: Settings):

@@ -59,14 +59,16 @@ def key(
     deadline = time.monotonic() + wait
     while True:
         snap = server.snapshot("JoinCode")
-        if snap.running and snap.invite_code:
+        if snap.game_running and snap.invite_code:
             typer.echo(snap.invite_code)
             return
         if time.monotonic() >= deadline:
             break
         time.sleep(5)
-    if not snap.running:
+    if not snap.container_running:
         raise _fail(f"the server is {snap.status}, so there is no valid invite code")
+    if not snap.game_running:
+        raise _fail("the game isn't running: still starting, or crashed (see `dw status`)")
     raise _fail("no invite code logged yet; the server is still starting (try --wait 600)")
 
 
@@ -93,13 +95,15 @@ def status(ctx: typer.Context) -> None:
     """Show the server state, game build, world, players online, last autosave, invite code."""
     server: Server = ctx.obj
     snap = server.snapshot()
+    sidecars = (f"{name} {snap.sidecars.get(name, 'missing')}" for name in server.sidecar_names)
     rows = {
-        "Server": f"{snap.status} (started {_local_time(snap.started_at)})",
+        "Server": f"{snap.condition} (started {_local_time(snap.started_at)})",
         "Game build": _build_status(snap.installed_build, _latest_build()),
         "World": f"{snap.world or '?'} (GUID {snap.world_guid or '?'})",
         "Players online": ", ".join(snap.players) or "nobody",
         "Last autosave": _ago(snap.last_save),
-        "Invite code": (snap.running and snap.invite_code) or "-",
+        "Invite code": (snap.game_running and snap.invite_code) or "-",
+        "Sidecars": ", ".join(sidecars),
     }
     width = max(map(len, rows))
     for name, value in rows.items():
@@ -156,7 +160,7 @@ def _restart(
             if not server.wait_for_autosave():
                 _warn("no autosave in time; going ahead with the last one")
     _backup(server, label, download=True)
-    if before.running:
+    if before.container_running:
         _step("Stopping the game cleanly")
         outcome = server.stop()
         if outcome.startswith("still running"):
