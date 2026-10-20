@@ -1,0 +1,30 @@
+# Metadata for the shortbow-rapidshot-fix pak mod. Human-readable notes, not parsed by code.
+
+name = "shortbow-rapidshot-fix"
+summary = "Neutralize the shortbow Rapidshot special that crashes the dedicated server."
+engine = "UE5_6"
+game_build = "25811348"            # Steam build authored against; rebuild + bump after a game patch
+installs_as = "shortbow-rapidshot-fix_P"   # file stem dropped in Content/Paks/~mods/
+
+[crash]
+# Server-side SIGSEGV, read at null+0x30, on a PLAYER ranged-projectile hit:
+#   ADominionProjectile::Tick -> PerformHit -> BroadcastOnDamageApplied
+#     -> ADominionPlayerCharacter::SetupPlayerRangedAttackComponentDelegates lambda
+#       -> UPlayerCombatModeComponent::HandlePlayerEngagedActors   (CombatModeArea.h:38)
+# Enemy ranged attacks use a different path and are harmless. A longbow does not crash.
+signal = "SIGSEGV (read @ 0x30)"
+crash_site = "UPlayerCombatModeComponent::HandlePlayerEngagedActors"
+
+[target]
+# The Rapidshot action is shared across ALL shortbows (name is _Shortbow_, not _Oak_), so any
+# shortbow can trigger it and one override fixes them all.
+primary_asset = "PA_RangedAttack_Shortbow_Rapidshot"   # Player-Action data asset for the special
+collection = "BP_PlayerRangedAttackCollection_Shortbow" # binds which attacks a shortbow has
+affects = "all shortbows"
+
+[approach]
+# Content-layer workaround (we can't patch the C++). Candidate edits, in order of preference —
+# confirm against the asset in UAssetGUI once the .usmap is in hand (see NOTES.md):
+#  1. In PA_RangedAttack_Shortbow_Rapidshot, disable the special / cut the multi-projectile burst.
+#  2. In BP_PlayerRangedAttackCollection_Shortbow, drop Rapidshot so shortbows fall back to Snapshot.
+note = "Changes shortbow gameplay (the special). A workaround, not a root fix — Jagex owns the bug."

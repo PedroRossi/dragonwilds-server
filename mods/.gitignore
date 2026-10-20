@@ -1,0 +1,11 @@
+# Never commit game content. Extracted/edited/built assets are derivatives of Jagex's
+# copyrighted data, and the mappings file is redistributed by the community, not us.
+*/work/
+*/dist/
+*/src/
+*.usmap
+*.pak
+*.utoc
+*.ucas
+*.uasset
+*.uexp

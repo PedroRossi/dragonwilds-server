@@ -13,8 +13,15 @@ from dragonwilds.server import RemoteError, Server, Settings, Snapshot, public_b
 
 LOCAL_BACKUPS = Path.home() / "dragonwilds-backups"
 LABEL_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+MOD_SUFFIXES = {".pak", ".utoc", ".ucas"}  # one IoStore pak set per mod
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
+mod_app = typer.Typer(
+    no_args_is_help=True,
+    add_completion=False,
+    help="Pak mods in the server's Content/Paks/~mods folder (install, list, disable).",
+)
+app.add_typer(mod_app, name="mod")
 
 Yes = Annotated[bool, typer.Option("--yes", "-y", help="Don't ask before kicking online players.")]
 WaitSave = Annotated[
@@ -141,6 +148,12 @@ def update(
         _step(f"Already on the latest build ({latest})")
         return
     _step(f"Updating build {before.installed_build} -> {latest or '?'}")
+    if server.mod_state().state == "active":
+        _warn(
+            "pak mods are installed; a new build usually breaks them and can stop the server"
+            " booting. If it doesn't come back, run `dw mod disable` and rebuild them for the"
+            " new build."
+        )
     lines = _restart(server, before, "pre-update", yes=yes, wait_save=wait_save, timeout=timeout)
     installed = parsing.last_match(parsing.INSTALLED_BUILD, lines)
     if latest and installed != latest:
@@ -272,6 +285,92 @@ def _warn(message: str) -> None:
 def _fail(message: str) -> typer.Exit:
     typer.secho(f"error: {message}", fg=typer.colors.RED, err=True)
     return typer.Exit(1)
+
+
+def _collect_mod_files(paths: list[Path]) -> list[Path]:
+    """The .pak/.utoc/.ucas files among the given files and directories."""
+    files: list[Path] = []
+    for path in paths:
+        if path.is_dir():
+            files += sorted(f for f in path.iterdir() if f.suffix in MOD_SUFFIXES)
+        elif path.is_file():
+            if path.suffix in MOD_SUFFIXES:
+                files.append(path)
+        else:
+            raise _fail(f"no such path: {path}")
+    return files
+
+
+@mod_app.command("ls")
+def mod_ls(ctx: typer.Context) -> None:
+    """List the pak mods installed on the server."""
+    server: Server = ctx.obj
+    state = server.mod_state()
+    if state.state == "none":
+        _info("no mods installed — the server is vanilla")
+        return
+    where = "~mods" if state.state == "active" else "~mods.disabled (inactive until re-enabled)"
+    _step(f"Mods {state.state} ({where})")
+    for name, size in state.files:
+        _info(f"{name} ({size / 1e6:.1f} MB)")
+    if not state.files:
+        _info("(folder present but empty — still flags the server as modded)")
+
+
+@mod_app.command("install")
+def mod_install(
+    ctx: typer.Context,
+    paths: Annotated[
+        list[Path],
+        typer.Argument(help="Built .pak/.utoc/.ucas files, or a dir (e.g. mods/<name>/dist)."),
+    ],
+) -> None:
+    """Copy a built mod into ~mods. Does NOT restart — run `dw restart` to apply it."""
+    server: Server = ctx.obj
+    files = _collect_mod_files(paths)
+    if not files:
+        raise _fail("found no .pak/.utoc/.ucas files in the given paths")
+    server.install_mods(files)
+    _step(f"Installed to ~mods: {', '.join(sorted(f.name for f in files))}")
+    _warn("the server now lists as MODDED, and this only takes effect after a restart")
+    _info("apply it: dw restart   •   undo it: dw mod disable")
+
+
+@mod_app.command("rm")
+def mod_rm(
+    ctx: typer.Context,
+    name: Annotated[str, typer.Argument(help="Mod name; removes ~mods/<name>* files.")],
+) -> None:
+    """Remove one mod's files from ~mods."""
+    server: Server = ctx.obj
+    removed = server.remove_mod(name)
+    if not removed:
+        _warn(f"nothing in ~mods matched {name}*")
+        return
+    _step(f"Removed from ~mods: {', '.join(removed)}")
+    _info("takes effect on the next restart: dw restart")
+
+
+@mod_app.command("disable")
+def mod_disable(ctx: typer.Context) -> None:
+    """Revert to vanilla: move ~mods aside to ~mods.disabled. The easy undo before a game patch."""
+    server: Server = ctx.obj
+    if server.disable_mods():
+        _step("Mods disabled — ~mods moved to ~mods.disabled; the server is vanilla again")
+        _info("takes effect on the next restart: dw restart   •   bring them back: dw mod enable")
+    else:
+        _info("no active mods to disable")
+
+
+@mod_app.command("enable")
+def mod_enable(ctx: typer.Context) -> None:
+    """Re-activate mods previously set aside with `dw mod disable`."""
+    server: Server = ctx.obj
+    if server.enable_mods():
+        _step("Mods re-enabled from ~mods.disabled")
+        _info("takes effect on the next restart: dw restart")
+    else:
+        _info("no disabled mods to enable")
 
 
 def main() -> None:

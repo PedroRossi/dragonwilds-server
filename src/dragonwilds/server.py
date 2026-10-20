@@ -1,10 +1,12 @@
 """Operations on the stack: shell scripts run on the Docker host, over SSH or locally."""
 
 import hashlib
+import io
 import json
 import os
 import shlex
 import subprocess
+import tarfile
 import urllib.request
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -163,6 +165,60 @@ done
 echo timeout
 """
 
+# Pak mods live in a "~mods" folder under Content/Paks. The game mounts every pak there over the
+# base game and flags the server "modded" in the browser while the folder exists (even empty), so
+# "disable" moves the whole folder aside to "~mods.disabled" to get a clean vanilla server back.
+# All of these take $1 = the ~mods directory. They are POSIX sh (no stat -c), so they also run on
+# the macOS host used by the tests.
+
+# $1 mods dir. Prints "@state active|disabled|none", then "@file <name> <bytes>" per mod file.
+MODS_STATE = r"""
+dir=$1 dis="${1}.disabled"
+if [ -d "$dir" ]; then echo "@state active"; d=$dir
+elif [ -d "$dis" ]; then echo "@state disabled"; d=$dis
+else echo "@state none"; exit 0; fi
+for f in "$d"/*; do [ -e "$f" ] || continue; echo "@file ${f##*/} $(wc -c < "$f" | tr -d ' ')"; done
+"""
+
+# $1 mods dir. Reads a tar of mod files from stdin and extracts them into it (created if needed).
+MOD_INSTALL = r"""
+set -e
+mkdir -p "$1"
+cd "$1"
+tar -xf -
+"""
+
+# $1 mods dir, $2 name stem. Removes "$2"* from it; removes the now-empty folder (clears the flag).
+MOD_REMOVE = r"""
+dir=$1 stem=$2 any=0
+for f in "$dir/$stem"*; do
+  [ -e "$f" ] || continue
+  rm -rf "$f"; echo "@removed ${f##*/}"; any=1
+done
+[ "$any" = 1 ] || echo "@none"
+rmdir "$dir" 2>/dev/null && echo "@emptied" || true
+"""
+
+# $1 mods dir. Moves the active folder aside to "<dir>.disabled": the server goes back to vanilla.
+MOD_DISABLE = r"""
+dir=$1 dis="${1}.disabled"
+[ -d "$dir" ] || { echo "@none"; exit 0; }
+mkdir -p "$dis"
+for f in "$dir"/*; do [ -e "$f" ] || continue; mv -f "$f" "$dis"/; done
+rmdir "$dir" 2>/dev/null || true
+echo "@disabled"
+"""
+
+# $1 mods dir. Moves a "<dir>.disabled" folder back into place.
+MOD_ENABLE = r"""
+dir=$1 dis="${1}.disabled"
+[ -d "$dis" ] || { echo "@none"; exit 0; }
+mkdir -p "$dir"
+for f in "$dis"/*; do [ -e "$f" ] || continue; mv -f "$f" "$dir"/; done
+rmdir "$dis" 2>/dev/null || true
+echo "@enabled"
+"""
+
 
 class RemoteError(RuntimeError):
     """A command on the Docker host failed."""
@@ -179,15 +235,18 @@ class Host:
     def local(self) -> bool:
         return self.target == "local"
 
-    def run(self, script: str, *args: str, timeout: float = 300) -> bytes:
+    def run(
+        self, script: str, *args: str, timeout: float = 300, stdin: bytes | None = None
+    ) -> bytes:
+        feed = {"input": stdin} if stdin is not None else {"stdin": subprocess.DEVNULL}
         try:
             proc = subprocess.run(
                 self.argv(script, args),
-                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 env=self._env(),
                 timeout=timeout,
                 check=False,
+                **feed,
             )
         except FileNotFoundError as error:
             raise RemoteError(f"{error.filename} is not installed") from None
@@ -296,6 +355,23 @@ class Backup:
     saves: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class ModState:
+    """What is in the server's Content/Paks/~mods folder."""
+
+    state: str  # "active" (mounted), "disabled" (moved aside), or "none"
+    files: tuple[tuple[str, int], ...]  # (file name, bytes)
+
+
+def _tar(files: list[Path]) -> bytes:
+    """A flat tar of the given files, named by their basenames, for MOD_INSTALL's stdin."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        for path in files:
+            archive.add(path, arcname=path.name)
+    return buffer.getvalue()
+
+
 class Server:
     """The Dragonwilds container and its data directory on the Docker host."""
 
@@ -304,6 +380,7 @@ class Server:
         self.host = Host(settings.host, settings.ssh_password)
         self._manifest = f"{settings.data_dir}/steamapps/appmanifest_{STEAM_APP_ID}.acf"
         self._saved = f"{settings.data_dir}/RSDragonwilds/Saved"
+        self._mods_dir = f"{settings.data_dir}/RSDragonwilds/Content/Paks/~mods"
         # Named by compose.yaml after the server container.
         self.sidecar_names = (f"{settings.container}-backup", f"{settings.container}-watchdog")
 
@@ -370,6 +447,37 @@ class Server:
         saves = f"{self._saved}/SaveGames"
         out = self.host.text(WAIT_FOR_SAVE, saves, str(timeout), timeout=timeout + 60)
         return out.strip() == "saved"
+
+    def mod_state(self) -> ModState:
+        """What the server's ~mods folder holds, without changing anything."""
+        state = "none"
+        files: list[tuple[str, int]] = []
+        for line in self.host.text(MODS_STATE, self._mods_dir).splitlines():
+            if line.startswith("@state "):
+                state = line.removeprefix("@state ").strip()
+            elif line.startswith("@file "):
+                name, _, size = line.removeprefix("@file ").rpartition(" ")
+                files.append((name, int(size)))
+        return ModState(state, tuple(files))
+
+    def install_mods(self, files: list[Path]) -> None:
+        """Copy built mod files into ~mods (creating it). Applies on the next restart."""
+        self.host.run(MOD_INSTALL, self._mods_dir, stdin=_tar(files))
+
+    def remove_mod(self, stem: str) -> list[str]:
+        """Remove ~mods files beginning with stem; returns the names removed."""
+        out = self.host.text(MOD_REMOVE, self._mods_dir, stem)
+        return [
+            ln.removeprefix("@removed ") for ln in out.splitlines() if ln.startswith("@removed ")
+        ]
+
+    def disable_mods(self) -> bool:
+        """Move ~mods aside to ~mods.disabled. True if there were active mods to disable."""
+        return "@disabled" in self.host.text(MOD_DISABLE, self._mods_dir)
+
+    def enable_mods(self) -> bool:
+        """Move ~mods.disabled back to ~mods. True if there were disabled mods to restore."""
+        return "@enabled" in self.host.text(MOD_ENABLE, self._mods_dir)
 
 
 def public_build() -> str:

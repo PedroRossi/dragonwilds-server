@@ -26,6 +26,7 @@ uv run dw backup     # verified backup on the host, plus a copy in ~/dragonwilds
 uv run dw status     # health (incl. a crashed game), Steam build, world, players, autosave, sidecars
 uv run dw update     # after a game patch: restart onto the new build, only if there is one
 uv run dw restart    # same, without the build check
+uv run dw mod ls     # pak mods in Content/Paks/~mods: ls/install/rm/disable/enable (see MODDING.md)
 ```
 `restart` and `update` back up first. If anyone is online they ask before kicking them and wait for the next
 autosave. Then they stop the game process cleanly (a plain `docker stop` kills it outright because the image's
@@ -104,6 +105,9 @@ The join code in the logs and the server GUID change on every start. Gameplay se
 live in the world save.
 Roles: owner (the Owner ID) can ban/unban; admins (password or list) can ban online players; players need the
 world name + password.
+
+For what you can actually change on this build — config, launch args, CVars via `RSDW_ADDITIONAL_ARGS`, and why
+content mods aren't a path here — see [Modding & tuning](MODDING.md).
 
 ## Troubleshooting
 - Listed but "connection lost" on join → UDP 7777/8888 not reaching the host (router/ISP).
