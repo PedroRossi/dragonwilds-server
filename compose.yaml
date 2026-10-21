@@ -27,8 +27,14 @@ services:
       RSDW_BEACON_PORT: "8888"
       # Stop when Steam publishes a new build; restart policy brings it back on the new build (clients must match).
       RSDW_AUTO_STOP_ON_UPDATE: "true"
-      # Extra launch args for RSDragonwildsServer.sh, if ever needed.
-      RSDW_ADDITIONAL_ARGS: ${RSDW_ADDITIONAL_ARGS:-}
+      # Extra launch args for RSDragonwildsServer.sh. We bake in a longer net ConnectionTimeout
+      # (engine default 80s) so a long-but-recoverable client freeze -- e.g. the World Partition
+      # area-streaming UI hitch -- rides out instead of dropping the player at 80s. The stack's own
+      # RSDW_ADDITIONAL_ARGS (e.g. net.MaxPlayersOverride) still applies, appended after.
+      RSDW_ADDITIONAL_ARGS: >-
+        -ini:Engine:[/Script/Engine.NetDriver]:ConnectionTimeout=300
+        -ini:Engine:[/Script/OnlineSubsystemUtils.IpNetDriver]:ConnectionTimeout=300
+        ${RSDW_ADDITIONAL_ARGS:-}
       # 2 = server logs on (0 off, 1 SteamCMD, 3 both).
       DEBUG: "2"
       # Set to "1" once to re-validate files after a bad update.
