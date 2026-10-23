@@ -27,12 +27,17 @@ services:
       RSDW_BEACON_PORT: "8888"
       # Stop when Steam publishes a new build; restart policy brings it back on the new build (clients must match).
       RSDW_AUTO_STOP_ON_UPDATE: "true"
-      # Extra launch args for RSDragonwildsServer.sh. We bake in a longer net ConnectionTimeout
-      # (engine default 80s) so a long-but-recoverable client freeze -- e.g. the World Partition
-      # area-streaming UI hitch -- rides out instead of dropping the player at 80s. The stack's own
-      # RSDW_ADDITIONAL_ARGS (e.g. net.MaxPlayersOverride) still applies, appended after.
+      # Extra launch args for RSDragonwildsServer.sh. The active net driver is RedpointEOSNetDriver
+      # (module RedpointEOSNetworking, a subclass of IpNetDriver), and UE reads ConnectionTimeout from
+      # the *leaf* class's own config section -- so the Engine.NetDriver / IpNetDriver sections we set
+      # before were ignored (a session still dropped at exactly 80s). We raise it on the EOS driver's
+      # own section to 300s (baked default ~80s) so a long-but-recoverable client freeze -- e.g. the
+      # World Partition area-streaming UI hitch -- rides out instead of dropping the player at 80s.
+      # The IpNetDriver line covers the fallback driver. The stack's own RSDW_ADDITIONAL_ARGS
+      # (e.g. net.MaxPlayersOverride) still applies, appended after.
       RSDW_ADDITIONAL_ARGS: >-
-        -ini:Engine:[/Script/Engine.NetDriver]:ConnectionTimeout=300
+        -ini:Engine:[/Script/RedpointEOSNetworking.RedpointEOSNetDriver]:ConnectionTimeout=300
+        -ini:Engine:[/Script/RedpointEOSNetworking.RedpointEOSNetDriver]:InitialConnectTimeout=300
         -ini:Engine:[/Script/OnlineSubsystemUtils.IpNetDriver]:ConnectionTimeout=300
         ${RSDW_ADDITIONAL_ARGS:-}
       # 2 = server logs on (0 off, 1 SteamCMD, 3 both).
@@ -114,3 +119,45 @@ services:
           tar czf "$$snapshot" -C /data/RSDragonwilds/Saved SaveGames && chown 1000:1000 "$$snapshot"
           docker restart -t 30 "$$c" >/dev/null && restarts="$$restarts $$now"
         done
+
+  # Public read-only page that always shows the current join code (the FastAPI app in ./joincode).
+  # It reads the live server log read-only; the code only changes on restart. The image is built from
+  # ./joincode (Dockerfile) and tagged joincode:latest -- compose uses an existing joincode:latest if
+  # present, otherwise builds it (needs the ./joincode context, e.g. a git-backed deploy or local build).
+  joincode:
+    build: ./joincode
+    image: joincode:latest
+    container_name: joincode
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    volumes:
+      - /home/pedro/dragonwilds:/data:ro
+    environment:
+      DW_WORLD_NAME: ${RSDW_WORLD_NAME:-WorldWarWirley}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Cloudflare Tunnel connector publishing game.rossi.party -> the joincode page, with no port-forward
+  # and surviving the dynamic public IP. Ingress lives on the "dragonwilds-joincode" tunnel in the
+  # Cloudflare dashboard/API (game.rossi.party -> http://localhost:8787); host networking lets
+  # localhost:8787 reach the joincode container's published port. TUNNEL_TOKEN is that tunnel's
+  # connector token -- set it in the stack environment, never commit it.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared-joincode
+    restart: unless-stopped
+    network_mode: host
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN (the dragonwilds-joincode tunnel connector token) in the stack environment}
+    depends_on:
+      - joincode
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
