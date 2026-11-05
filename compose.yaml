@@ -75,10 +75,12 @@ services:
         sleep 1800;
       done'
 
-  # Restarts the server when the game process dies but its container stays up (a crash): the image's
-  # entrypoint only notices after its 30-minute Steam update sleep. Acts only once it has seen the game
+  # Restarts the server when the game process dies but its container stays up (a crash), OR when the
+  # game hangs -- process alive but spinning, with its log idle past HANG_THRESHOLD seconds (the
+  # entrypoint only notices a dead process after its 30-min Steam sleep, and never notices a hang;
+  # a healthy server writes EOS heartbeats to the log ~every 30s). Acts only once it has seen the game
   # running in the container's current start, never on a stopped container; snapshots the saves first
-  # and stands back after 3 restarts in an hour (crash loop). Shell "$" is written "$$" for compose.
+  # and stands back after 3 restarts in an hour (crash/hang loop). Shell "$" is written "$$" for compose.
   watchdog:
     image: docker:29.8.1-cli
     container_name: dragonwilds-watchdog
@@ -91,29 +93,42 @@ services:
     environment:
       WATCH_CONTAINER: dragonwilds
       WATCH_INTERVAL: "20"
+      # Treat the game as hung (and restart it) if its log stops advancing for this many seconds while
+      # the process is still alive. Healthy server logs EOS heartbeats ~every 30s. 0 disables the check.
+      HANG_THRESHOLD: "600"
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         c=$$WATCH_CONTAINER seen= misses=0 restarts=
-        echo "watching $$c every $${WATCH_INTERVAL}s"
+        log=/data/RSDragonwilds/Saved/Logs/RSDragonwilds.log
+        hang=$${HANG_THRESHOLD:-600}
+        echo "watching $$c every $${WATCH_INTERVAL}s (hang if log idle > $${hang}s)"
         while sleep "$$WATCH_INTERVAL"; do
           run=$$(docker inspect -f '{{.State.Running}} {{.State.StartedAt}}' "$$c" 2>/dev/null)
           case $$run in true\ *) ;; *) seen= misses=0; continue ;; esac
+          reason=
           if docker top "$$c" 2>/dev/null | grep -q RSDragonwildsServer-Linux-Shipping; then
             seen=$$run misses=0
-            continue
+            now=$$(date +%s); m=$$(stat -c %Y "$$log" 2>/dev/null || echo "$$now")
+            if [ "$$hang" -gt 0 ] && [ $$((now - m)) -ge "$$hang" ]; then
+              reason="hung (log idle $$((now - m))s, process alive)"
+            else
+              continue
+            fi
+          else
+            [ "$$seen" = "$$run" ] || continue  # not launched yet in this start (SteamCMD)
+            misses=$$((misses + 1))
+            [ "$$misses" -ge 2 ] || continue
+            reason="game process gone"
           fi
-          [ "$$seen" = "$$run" ] || continue  # not launched yet in this start (SteamCMD)
-          misses=$$((misses + 1))
-          [ "$$misses" -ge 2 ] || continue
           seen= misses=0 now=$$(date +%s)
           restarts=$$(for t in $$restarts; do [ $$((now - t)) -lt 3600 ] && echo "$$t"; done)
           set -- $$restarts
           if [ $$# -ge 3 ]; then
-            echo "$$(date '+%F %T') game down again, 3 restarts this hour: leaving it to the entrypoint"
+            echo "$$(date '+%F %T') $$reason, 3 restarts this hour: leaving it to the entrypoint"
             continue
           fi
-          echo "$$(date '+%F %T') game process gone, restarting $$c"
+          echo "$$(date '+%F %T') $$reason - restarting $$c"
           docker logs --tail 300 "$$c" 2>&1 | grep -E '^(Unhandled Exception|0x)' | head -n 2 | cut -c 1-200
           snapshot="/backups/saves-$$(date +%F-%H%M)-crash.tgz"
           tar czf "$$snapshot" -C /data/RSDragonwilds/Saved SaveGames && chown 1000:1000 "$$snapshot"
