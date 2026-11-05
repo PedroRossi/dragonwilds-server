@@ -33,17 +33,14 @@ services:
       # before were ignored (a session still dropped at exactly 80s). We raise it on the EOS driver's
       # own section to 300s (baked default ~80s) so a long-but-recoverable client freeze -- e.g. the
       # World Partition area-streaming UI hitch -- rides out instead of dropping the player at 80s.
-      # The IpNetDriver line covers the fallback driver. We also raise LinkedStorageRadius
-      # (UInventorySettings : UDeveloperSettings -- a config value) to ~100 m so linked chests reach
-      # across a large build (default ~12-32 m); set on both the Game and Engine config bases since the
-      # exact one for this class isn't known, and the wrong one is ignored. The stack's own
-      # RSDW_ADDITIONAL_ARGS (e.g. net.MaxPlayersOverride) still applies, appended after.
+      # The IpNetDriver line covers the fallback driver. The stack's own RSDW_ADDITIONAL_ARGS
+      # (e.g. net.MaxPlayersOverride) still applies, appended after.
+      # (Note: a LinkedStorageRadius override was tried here and removed -- this image does NOT honor
+      # command-line -ini overrides for the Game config branch, so it had no effect. See memory.)
       RSDW_ADDITIONAL_ARGS: >-
         -ini:Engine:[/Script/RedpointEOSNetworking.RedpointEOSNetDriver]:ConnectionTimeout=300
         -ini:Engine:[/Script/RedpointEOSNetworking.RedpointEOSNetDriver]:InitialConnectTimeout=300
         -ini:Engine:[/Script/OnlineSubsystemUtils.IpNetDriver]:ConnectionTimeout=300
-        -ini:Game:[/Script/Dominion.InventorySettings]:LinkedStorageRadius=10000
-        -ini:Engine:[/Script/Dominion.InventorySettings]:LinkedStorageRadius=10000
         ${RSDW_ADDITIONAL_ARGS:-}
       # 2 = server logs on (0 off, 1 SteamCMD, 3 both).
       DEBUG: "2"
