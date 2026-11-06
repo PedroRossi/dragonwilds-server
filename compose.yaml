@@ -27,20 +27,15 @@ services:
       RSDW_BEACON_PORT: "8888"
       # Stop when Steam publishes a new build; restart policy brings it back on the new build (clients must match).
       RSDW_AUTO_STOP_ON_UPDATE: "true"
-      # Extra launch args for RSDragonwildsServer.sh. The active net driver is RedpointEOSNetDriver
-      # (module RedpointEOSNetworking, a subclass of IpNetDriver), and UE reads ConnectionTimeout from
-      # the *leaf* class's own config section -- so the Engine.NetDriver / IpNetDriver sections we set
-      # before were ignored (a session still dropped at exactly 80s). We raise it on the EOS driver's
-      # own section to 300s (baked default ~80s) so a long-but-recoverable client freeze -- e.g. the
-      # World Partition area-streaming UI hitch -- rides out instead of dropping the player at 80s.
-      # The IpNetDriver line covers the fallback driver. The stack's own RSDW_ADDITIONAL_ARGS
-      # (e.g. net.MaxPlayersOverride) still applies, appended after.
-      # (Note: a LinkedStorageRadius override was tried here and removed -- this image does NOT honor
-      # command-line -ini overrides for the Game config branch, so it had no effect. See memory.)
+      # Extra launch args for RSDragonwildsServer.sh. IMPORTANT: this image does NOT honor command-line
+      # -ini:[Section]:Key=Value overrides for class-default config sections, and it rewrites/wipes any
+      # manual Saved/Config edit on restart. Confirmed the hard way: a net ConnectionTimeout=300 override
+      # (RedpointEOSNetDriver / IpNetDriver) never took -- 76/76 timeouts stayed at the stock 80s -- and a
+      # Game-branch InventorySettings.LinkedStorageRadius override was ignored too. So we bake NO -ini
+      # class-config overrides here; raising the net timeout or the linked-chest reach needs a Jagex change.
+      # Only the stack's own RSDW_ADDITIONAL_ARGS passes through, and of those only the CVar form works
+      # (e.g. -ini:Engine:[SystemSettings]:net.MaxPlayersOverride).
       RSDW_ADDITIONAL_ARGS: >-
-        -ini:Engine:[/Script/RedpointEOSNetworking.RedpointEOSNetDriver]:ConnectionTimeout=300
-        -ini:Engine:[/Script/RedpointEOSNetworking.RedpointEOSNetDriver]:InitialConnectTimeout=300
-        -ini:Engine:[/Script/OnlineSubsystemUtils.IpNetDriver]:ConnectionTimeout=300
         ${RSDW_ADDITIONAL_ARGS:-}
       # 2 = server logs on (0 off, 1 SteamCMD, 3 both).
       DEBUG: "2"
