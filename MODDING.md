@@ -67,9 +67,24 @@ touching any file. Useful, low-risk examples:
 # Console-variable overrides at boot (networking/perf). Syntax: -dpcvars="a=1,b=2"
 -dpcvars="net.MaxConnectionsToAllowInGame=6"
 
-# Force an ini value without editing the (rewritten) file on disk
--ini:Engine:[/Script/Engine.GameNetworkManager]:MaxDynamicBandwidth=8000
+# Force an ini value without editing the (rewritten) file on disk. One switch per config file:
+#   -ini:<File>:[<Section>]:<Key>=<Value>,[<Section>]:<Key>=<Value>,...
+-ini:Game:[/Script/Engine.GameNetworkManager]:MaxDynamicBandwidth=8000
 ```
+
+**`<File>` must be the config file the class reads**, i.e. its `UCLASS(config=...)` name. You can't
+guess it from the section path, and a switch aimed at the wrong file is silently ignored. Checked
+against this build's binary:
+
+| Section | `<File>` |
+| --- | --- |
+| `/Script/Engine.GameNetworkManager`, `/Script/Dominion.InventorySettings` | `Game` |
+| `/Script/OnlineSubsystemUtils.IpNetDriver`, `/Script/Engine.NetDriver`, `[SystemSettings]` (CVars) | `Engine` |
+| `/Script/RedpointEOSNetworking.RedpointEOSNetDriver` (the net driver this game actually uses) | `OnlineSubsystemRedpointEOS` |
+
+The last row is why our first net-timeout fix (`-ini:Engine:[...RedpointEOSNetDriver]:ConnectionTimeout`)
+never applied. The Redpoint plugin's own `OnlineSubsystemRedpointEOS` ini sets `ConnectionTimeout=80`, and
+that file wins over anything set in Engine.
 
 Set it in the stack env, redeploy, then confirm the server honoured it:
 
@@ -81,9 +96,17 @@ docker logs dragonwilds 2>&1 | grep -ai "CVar\|LogInit: Command Line"
 
 Caveats, stated honestly:
 - This is a **Shipping** build, so the in-game console and `-ExecCmds=` / cheat commands are
-  likely compiled out. CVar overrides via `-dpcvars=` and `-ini:` generally still apply — but
-  **verify from the log** rather than assuming; if a setting doesn't appear, it isn't supported
-  on this build.
+  likely compiled out. `-ini:` overrides are enabled on this build (a command-line-only
+  `net.MaxPlayersOverride` shows up as `LogConfig: Set CVar`).
+- **Only CVars are logged.** A class-property override (anything under `[/Script/...]`) leaves no
+  log line, so verify it by its effect. For example, the next `Connection TIMED OUT` line prints
+  the live `Threshold:`.
+- **Some values are evaluated on the client.** The linked-chest reach (`LinkedStorageRadius`, 30 m)
+  is one: each client picks chests with its own value and the server only re-checks them against
+  its value, so a server override is just a cap. Only PC players can raise their side, with a client
+  mod or their own `Game.ini`. Console players are stuck at 30 m, so we don't set it here.
+- Never edit `Saved/Config` while the server is running. The game rewrites those files from
+  memory and your edit is lost. Edit with the server stopped, or use `-ini:`.
 - CVars tune performance/networking/logging. They are **not** a gameplay-rules editor.
 
 ## 3. Gameplay rules → the world save
