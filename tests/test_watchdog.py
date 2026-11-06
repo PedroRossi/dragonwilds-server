@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import sys
 import tarfile
 import threading
 import time
@@ -16,13 +17,13 @@ COMPOSE = Path(__file__).parents[1] / "compose.yaml"
 
 
 @contextmanager
-def watchdog(docker: Path) -> Iterator[Path]:
+def watchdog(docker: Path, **env_overrides: str) -> Iterator[Path]:
     """Run the watchdog, checking every 0.2 s, with its mounts under the fake docker's dir."""
     script = yaml.safe_load(COMPOSE.read_text())["services"]["watchdog"]["command"][0]
     script = script.replace("$$", "$")  # what compose hands the container
     script = script.replace("/data/", f"{docker}/data/").replace("/backups/", f"{docker}/backups/")
     (docker / "backups").mkdir(exist_ok=True)
-    env = {**os.environ, "WATCH_CONTAINER": "dragonwilds", "WATCH_INTERVAL": "0.2"}
+    env = {**os.environ, "WATCH_CONTAINER": "dragonwilds", "WATCH_INTERVAL": "0.2", **env_overrides}
     output = docker / "watchdog.out"
     with output.open("w") as out:
         proc = subprocess.Popen(["sh", "-c", script], env=env, stdout=out, stderr=out)
@@ -57,11 +58,42 @@ def test_restarts_the_server_when_the_game_dies(docker: Path):
         (docker / "game-exited").touch()
         assert wait_for(lambda: "restart -t 30 dragonwilds" in calls(docker))
     log = output.read_text()
-    assert "game process gone, restarting dragonwilds" in log
+    assert "game process gone - restarting dragonwilds" in log
     assert "Unhandled Exception: SIGSEGV" in log
     [snapshot] = (docker / "backups").glob("saves-*-crash.tgz")
     with tarfile.open(snapshot) as archive:
         assert "SaveGames/MyWorld.sav" in archive.getnames()
+
+
+def game_log_idle_for(docker: Path, seconds: float) -> None:
+    """Write the game log, last modified `seconds` ago, and give the watchdog a GNU-style stat."""
+    # The watchdog image is busybox; macOS stat lacks `-c %Y`, so shim it on the fake docker's PATH.
+    stat = docker / "bin" / "stat"
+    stat.write_text(
+        f'#!/bin/sh\nexec "{sys.executable}" -c '
+        '"import os, sys; print(int(os.stat(sys.argv[1]).st_mtime))" "$3"\n'
+    )
+    stat.chmod(0o755)
+    game_log = docker / "data/RSDragonwilds/Saved/Logs/RSDragonwilds.log"
+    game_log.parent.mkdir(parents=True)
+    game_log.write_text("LogEOS: heartbeat\n")
+    modified = time.time() - seconds
+    os.utime(game_log, (modified, modified))
+
+
+def test_restarts_a_hung_server_whose_log_stopped_advancing(docker: Path):
+    game_log_idle_for(docker, 120)
+    with watchdog(docker, HANG_THRESHOLD="60") as output:
+        assert wait_for(lambda: "restart -t 30 dragonwilds" in calls(docker))
+    assert "hung (log idle" in output.read_text()
+    assert list((docker / "backups").glob("saves-*-crash.tgz"))
+
+
+def test_leaves_alone_a_server_whose_log_is_fresh(docker: Path):
+    game_log_idle_for(docker, 5)
+    with watchdog(docker, HANG_THRESHOLD="60"):
+        assert wait_for(lambda: calls(docker).count("top dragonwilds") >= 5)
+    assert "restart" not in calls(docker)
 
 
 @pytest.mark.parametrize("status", ["running", "exited"])
