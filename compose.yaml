@@ -27,15 +27,20 @@ services:
       RSDW_BEACON_PORT: "8888"
       # Stop when Steam publishes a new build; restart policy brings it back on the new build (clients must match).
       RSDW_AUTO_STOP_ON_UPDATE: "true"
-      # Extra launch args for RSDragonwildsServer.sh. IMPORTANT: this image does NOT honor command-line
-      # -ini:[Section]:Key=Value overrides for class-default config sections, and it rewrites/wipes any
-      # manual Saved/Config edit on restart. Confirmed the hard way: a net ConnectionTimeout=300 override
-      # (RedpointEOSNetDriver / IpNetDriver) never took -- 76/76 timeouts stayed at the stock 80s -- and a
-      # Game-branch InventorySettings.LinkedStorageRadius override was ignored too. So we bake NO -ini
-      # class-config overrides here; raising the net timeout or the linked-chest reach needs a Jagex change.
-      # Only the stack's own RSDW_ADDITIONAL_ARGS passes through, and of those only the CVar form works
-      # (e.g. -ini:Engine:[SystemSettings]:net.MaxPlayersOverride).
+      # Extra launch args for RSDragonwildsServer.sh; the image passes them through untouched. Command-line
+      # -ini:<File>:[Section]:Key=Value overrides DO work on this build, but <File> must be the config file the
+      # class actually reads (its UCLASS config name), which isn't always Engine/Game. One switch per file,
+      # entries comma-separated (Epic's documented form). The stack's own RSDW_ADDITIONAL_ARGS (e.g.
+      # -ini:Engine:[SystemSettings]:net.MaxPlayersOverride=8) is appended after these.
+      #  - Net timeout 80s -> 300s, so a client that freezes for a while isn't kicked. The EOS net driver is
+      #    config=OnlineSubsystemRedpointEOS and takes ConnectionTimeout=80 from the Redpoint plugin's own ini;
+      #    that's why the earlier -ini:Engine: attempts never applied (76/76 timeouts stayed at 80s). Clients
+      #    still time out at their own 80s, so this doesn't save a player through a real network outage.
+      #  - Deliberately absent: the linked-chest reach. Each client picks which chests count using its own
+      #    LinkedStorageRadius (30m) and the server only re-checks them, so a server value can't extend it,
+      #    and console players can't change theirs. See MODDING.md.
       RSDW_ADDITIONAL_ARGS: >-
+        -ini:OnlineSubsystemRedpointEOS:[/Script/RedpointEOSNetworking.RedpointEOSNetDriver]:ConnectionTimeout=300
         ${RSDW_ADDITIONAL_ARGS:-}
       # 2 = server logs on (0 off, 1 SteamCMD, 3 both).
       DEBUG: "2"
