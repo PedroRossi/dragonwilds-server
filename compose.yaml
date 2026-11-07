@@ -32,15 +32,18 @@ services:
       # class actually reads (its UCLASS config name), which isn't always Engine/Game. One switch per file,
       # entries comma-separated (Epic's documented form). The stack's own RSDW_ADDITIONAL_ARGS (e.g.
       # -ini:Engine:[SystemSettings]:net.MaxPlayersOverride=8) is appended after these.
-      #  - Net timeout 80s -> 300s, so a client that freezes for a while isn't kicked. The EOS net driver is
-      #    config=OnlineSubsystemRedpointEOS and takes ConnectionTimeout=80 from the Redpoint plugin's own ini;
+      #  - Net timeout 80s -> 120s, so a client that freezes for up to 2 minutes isn't kicked. The EOS net driver
+      #    is config=OnlineSubsystemRedpointEOS and takes ConnectionTimeout=80 from the Redpoint plugin's own ini;
       #    that's why the earlier -ini:Engine: attempts never applied (76/76 timeouts stayed at 80s). Clients
       #    still time out at their own 80s, so this doesn't save a player through a real network outage.
+      #    Keep it short: until the server drops a dead connection, the game refuses that player's rejoin
+      #    ("set player id to that of an existing player, logging out"). At 300s, players who dropped were
+      #    bounced for over a minute (2026-11-06); 120s caps that at ~40s after their client gives up.
       #  - Deliberately absent: the linked-chest reach. Each client picks which chests count using its own
       #    LinkedStorageRadius (30m) and the server only re-checks them, so a server value can't extend it,
       #    and console players can't change theirs. See MODDING.md.
       RSDW_ADDITIONAL_ARGS: >-
-        -ini:OnlineSubsystemRedpointEOS:[/Script/RedpointEOSNetworking.RedpointEOSNetDriver]:ConnectionTimeout=300
+        -ini:OnlineSubsystemRedpointEOS:[/Script/RedpointEOSNetworking.RedpointEOSNetDriver]:ConnectionTimeout=120
         ${RSDW_ADDITIONAL_ARGS:-}
       # 2 = server logs on (0 off, 1 SteamCMD, 3 both).
       DEBUG: "2"
